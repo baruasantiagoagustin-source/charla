@@ -23,6 +23,7 @@ import {
   serverTimestamp,
   runTransaction,
   writeBatch,
+  Timestamp,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
@@ -38,12 +39,12 @@ function showScreen(name) {
 }
 
 let toastTimer;
-function toast(text) {
+function toast(text, ms = 2600) {
   const el = $("toast");
   el.textContent = text;
   el.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+  toastTimer = setTimeout(() => el.classList.remove("show"), ms);
 }
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 32 símbolos, sin O/0/I/1
@@ -106,6 +107,8 @@ let sessionId = 0; // se incrementa en cada cambio de sesión para descartar res
 let verifyTimer = null;
 let verifyTick = null;
 let resendAt = 0;
+let currentMsgs = []; // mensajes del chat abierto, en orden cronológico
+let installEvent = null; // aviso de instalación de la PWA guardado para el botón
 const userCache = new Map(); // uid -> { displayName, friendCode }
 const imageData = new Map(); // "chatId/imageId" -> data URL ya descargada
 const imagePending = new Map(); // "chatId/imageId" -> Promise en curso
@@ -331,6 +334,7 @@ function cleanup() {
   me = null;
   chats = [];
   activeChatId = null;
+  currentMsgs = [];
   pinned = true;
   userCache.clear();
   imageData.clear();
@@ -570,6 +574,7 @@ async function openChat(chatId) {
     imagePending.clear();
   }
   activeChatId = chatId;
+  currentMsgs = [];
   pinned = true;
 
   const otherUid = chatId.split("_").find((p) => p !== me.uid);
@@ -603,6 +608,7 @@ async function openChat(chatId) {
           };
         })
         .reverse();
+      currentMsgs = msgs;
       renderMessages(chatId, msgs);
     },
     (err) => toast("No se pudieron cargar los mensajes: " + (err.code || err.message))
@@ -634,6 +640,7 @@ function applyChatState() {
   $("send-text").disabled = !canWrite;
   $("send-btn").disabled = !canWrite;
   $("attach").disabled = !canWrite;
+  $("messages").classList.toggle("no-delete", !canWrite); // sin chat abierto no se puede borrar
   $("send-text").placeholder = canWrite ? "Escribí un mensaje" : "No podés escribir en este chat";
 }
 
@@ -700,17 +707,122 @@ function renderMessages(chatId, msgs) {
     if (m.imageId) bubble.append(buildImage(chatId, m.imageId));
     if (m.text) {
       const text = document.createElement("span");
-      text.textContent = m.text;
+      appendLinkified(text, m.text);
       bubble.append(text);
+    }
+
+    const foot = document.createElement("div");
+    foot.className = "msg-foot";
+    if (m.senderId === me.uid) {
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "msg-del";
+      del.textContent = "Eliminar";
+      del.setAttribute("aria-label", "Eliminar este mensaje");
+      del.addEventListener("click", () => deleteMessage(chatId, m));
+      foot.append(del);
     }
     const time = document.createElement("time");
     time.textContent = timeFmt.format(date);
-    bubble.append(time);
+    foot.append(time);
+    bubble.append(foot);
     box.append(bubble);
   }
 
   // Si estabas leyendo mensajes viejos, no te mueve; si estabas al final, te deja al final.
   box.scrollTop = wasPinned ? box.scrollHeight : prevTop;
+}
+
+/* ------------------------------------------------------------------ */
+/* Links clickeables                                                   */
+/* ------------------------------------------------------------------ */
+const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+
+// Saca la puntuación que casi seguro no es parte del enlace ("mirá www.sitio.com." → sin el punto final).
+function trimUrl(raw) {
+  let url = raw;
+  while (url) {
+    const last = url[url.length - 1];
+    if (/[.,;:!?'"\]}]/.test(last)) {
+      url = url.slice(0, -1);
+      continue;
+    }
+    // Un ")" final solo sobra si no hay un "(" que lo abra dentro del enlace.
+    if (last === ")" && (url.match(/\(/g) || []).length < (url.match(/\)/g) || []).length) {
+      url = url.slice(0, -1);
+      continue;
+    }
+    break;
+  }
+  return url;
+}
+
+// Devuelve la URL lista para un href, o null. Solo http/https: nunca javascript:, data:, etc.
+function safeHref(url) {
+  const candidate = /^www\./i.test(url) ? "https://" + url : url;
+  try {
+    const u = new URL(candidate);
+    const okProtocol = u.protocol === "http:" || u.protocol === "https:";
+    const okHost = u.hostname.includes(".") || u.hostname === "localhost";
+    return okProtocol && okHost ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
+// Escribe el texto en el elemento convirtiendo las URLs en enlaces. Todo se arma con nodos del DOM
+// (texto plano), nunca con innerHTML, así que un mensaje no puede inyectar HTML.
+function appendLinkified(parent, text) {
+  let cursor = 0;
+  for (const match of text.matchAll(URL_RE)) {
+    const url = trimUrl(match[0]);
+    const href = safeHref(url);
+    if (!href) continue;
+    if (match.index > cursor) parent.append(text.slice(cursor, match.index));
+    const a = document.createElement("a");
+    a.href = href;
+    a.textContent = url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer nofollow";
+    parent.append(a);
+    cursor = match.index + url.length;
+  }
+  if (cursor < text.length) parent.append(text.slice(cursor));
+}
+
+/* ------------------------------------------------------------------ */
+/* Borrar mensajes propios (no hay edición: si te equivocás, "hola*")  */
+/* ------------------------------------------------------------------ */
+function previewText(m) {
+  return m.imageId ? "📷 Imagen" : m.text.slice(0, 120);
+}
+
+async function deleteMessage(chatId, m) {
+  if (!window.confirm("¿Eliminar este mensaje para los dos? No se puede deshacer.")) return;
+
+  const chatRef = doc(db, "chats", chatId);
+  const batch = writeBatch(db);
+  batch.delete(doc(chatRef, "messages", m.id));
+  if (m.imageId) batch.delete(doc(chatRef, "images", m.imageId));
+
+  // Si era el último mensaje, la vista previa de la lista de chats pasa a ser la del anterior.
+  const idx = currentMsgs.findIndex((x) => x.id === m.id);
+  if (idx !== -1 && idx === currentMsgs.length - 1) {
+    const prev = currentMsgs[idx - 1];
+    batch.update(
+      chatRef,
+      prev
+        ? { lastMessage: previewText(prev), lastMessageAt: Timestamp.fromMillis(prev.at) }
+        : { lastMessage: "" }
+    );
+  }
+
+  try {
+    await batch.commit();
+    if (m.imageId) imageData.delete(`${chatId}/${m.imageId}`);
+  } catch (err) {
+    toast("No se pudo eliminar: " + (err.code || err.message));
+  }
 }
 
 async function sendMessage(text) {
@@ -743,6 +855,7 @@ $("back").addEventListener("click", () => {
   if (unsubMsgs) unsubMsgs();
   unsubMsgs = null;
   activeChatId = null;
+  currentMsgs = [];
   show($("chat-view"), false);
   show($("chat-placeholder"), true);
   renderChatList();
@@ -933,3 +1046,62 @@ $("lightbox").addEventListener("click", closeLightbox);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("lightbox").classList.contains("hidden")) closeLightbox();
 });
+
+/* ------------------------------------------------------------------ */
+/* App instalable (PWA)                                                */
+/* ------------------------------------------------------------------ */
+const isStandalone = () =>
+  window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+const isIOS =
+  /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+// El botón aparece si el navegador ofrece instalar (Chrome/Edge/Android) o si es iPhone/iPad
+// (donde no hay aviso automático y se explica el camino manual). Si ya está instalada, no aparece.
+function refreshInstallButton() {
+  show($("install"), !isStandalone() && (installEvent !== null || isIOS));
+}
+
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault(); // guardamos el aviso para mostrarlo cuando toquen el botón
+  installEvent = e;
+  refreshInstallButton();
+});
+
+window.addEventListener("appinstalled", () => {
+  installEvent = null;
+  refreshInstallButton();
+  toast("¡App instalada!");
+});
+
+$("install").addEventListener("click", async () => {
+  if (installEvent) {
+    const promptEvent = installEvent;
+    installEvent = null; // cada aviso solo se puede usar una vez
+    promptEvent.prompt();
+    try {
+      await promptEvent.userChoice;
+    } catch {
+      /* el usuario cerró el aviso */
+    }
+    refreshInstallButton();
+  } else if (isIOS) {
+    toast("Tocá el botón Compartir y elegí «Agregar a inicio» (desde Safari).", 6000);
+  }
+});
+refreshInstallButton();
+
+function registerServiceWorker() {
+  navigator.serviceWorker.register("sw.js").catch(() => {
+    /* sin service worker la app funciona igual, solo que no es instalable */
+  });
+}
+if ("serviceWorker" in navigator) {
+  if (document.readyState === "complete") registerServiceWorker();
+  else window.addEventListener("load", registerServiceWorker);
+}
+
+window.addEventListener("offline", () =>
+  toast("Sin conexión. Algunas funciones no van a andar hasta que vuelva.", 4000)
+);
+window.addEventListener("online", () => toast("Conexión recuperada."));
