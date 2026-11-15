@@ -13,6 +13,13 @@ chatear. Nadie más puede ver esa conversación.
   momento y solo quien bloqueó puede desbloquear.
 - **Imágenes:** JPG, PNG, WebP o GIF de hasta 10 MB. Se comprimen en el navegador a JPEG (máx. 1280 px,
   ~700 KB) y se guardan en Firestore, así funciona en el plan gratuito. Los GIF animados se envían como imagen fija.
+- **Links clickeables:** las direcciones `http://`, `https://` y `www.` en un mensaje se convierten en enlaces
+  que abren en otra pestaña. Solo se aceptan http/https (nunca `javascript:` ni similares) y el texto se arma
+  sin `innerHTML`, así que un mensaje no puede inyectar HTML.
+- **Borrar mensajes propios:** botón *Eliminar* en cada mensaje tuyo (y su imagen, si tiene). Se borra para los
+  dos y no se puede deshacer. **No hay edición**, como en las apps de antes: si te equivocás, mandás `hola*`.
+- **Instalable como app (PWA):** se agrega a la pantalla de inicio del celu o a la computadora, se abre a pantalla
+  completa con su propio ícono, y la interfaz abre aunque no haya conexión (los chats sí necesitan internet).
 - **Tiempo real**, diseño responsive y modo oscuro.
 
 ## Estructura del proyecto
@@ -23,6 +30,9 @@ charla/
 │   ├── index.html
 │   ├── styles.css
 │   ├── app.js
+│   ├── manifest.webmanifest ← datos de la app instalable (nombre, colores, íconos)
+│   ├── sw.js                ← service worker: deja la interfaz disponible sin conexión
+│   ├── icon-192.png, icon-512.png, icon-maskable-512.png, apple-touch-icon.png
 │   └── firebase-config.js   ← acá pegás la config de tu proyecto Firebase
 ├── firestore.rules       ← reglas de seguridad (se suben con Firebase CLI, NO con Vercel)
 ├── tests/                ← pruebas de las reglas (no se publican)
@@ -50,7 +60,8 @@ Los chats creados con la versión anterior no tienen `status`: se tratan como ac
 - Solo se puede escribir si el chat está aceptado. Solo quien **recibió** la solicitud puede aceptarla.
 - Solo quien bloqueó puede desbloquear.
 - No se puede listar usuarios ni códigos: solo consultar uno si ya conocés el código exacto.
-- Los mensajes no se editan ni se borran; `senderId` tiene que ser el usuario autenticado.
+- Los mensajes no se pueden editar. Solo el autor puede borrar los suyos, y solo mientras el chat esté aceptado.
+  `senderId` tiene que ser el usuario autenticado.
 - El código de amistad no se puede modificar y cada usuario reserva uno solo.
 - Las imágenes tienen un tope de tamaño en el servidor, no solo en la interfaz.
 
@@ -96,11 +107,14 @@ Abrí la URL que muestra (normalmente <http://localhost:3000>). `localhost` ya e
 5. Con B: aparece el chat con la insignia *Solicitud*. *Aceptar* → ya pueden escribirse.
 6. Probá enviar una imagen con 📎 y tocarla para verla ampliada.
 7. Con B: *Bloquear* → A ya no puede enviar. *Desbloquear* → vuelve a funcionar.
+8. Mandá un mensaje con un link (`www.ejemplo.com` o `https://ejemplo.com`): debe verse subrayado y abrir en otra pestaña.
+9. Tocá *Eliminar* en un mensaje tuyo: debe desaparecer para los dos. En un mensaje del otro no aparece el botón.
+10. Para probar la instalación en local, usá Chrome o Edge en `localhost` (ver sección 4).
 
 ### Pruebas automáticas de las reglas (recomendado antes de publicar)
 
-La carpeta `tests/` trae ~50 pruebas de las reglas de seguridad (verificación, solicitudes, bloqueo, privacidad
-entre usuarios, imágenes). Necesitan Node y Java (el emulador de Firestore corre sobre Java):
+La carpeta `tests/` trae ~60 pruebas de las reglas de seguridad (verificación, solicitudes, bloqueo, privacidad
+entre usuarios, imágenes, borrado). Necesitan Node y Java (el emulador de Firestore corre sobre Java):
 
 ```bash
 cd tests
@@ -179,6 +193,28 @@ Después seguí con los pasos 6 y 7 de la opción A.
 
 ---
 
+## 4. Instalarla como app (celular o computadora)
+
+Una vez publicada en Vercel (que usa HTTPS, requisito para instalar), cualquiera puede agregarla a su dispositivo.
+Dentro de la app aparece el botón **«📲 Instalar la app en este dispositivo»** arriba de la lista de chats cuando
+el navegador lo permite; si ya está instalada, no se muestra.
+
+- **Android (Chrome):** tocá ese botón y confirmá. También sirve el menú ⋮ → *Instalar app* / *Agregar a la pantalla
+  principal*.
+- **iPhone / iPad (Safari):** iOS no permite instalar con un botón. Tocá **Compartir** (el cuadrado con la flecha) →
+  **Agregar a inicio**. En iPhone, el botón de la app solo muestra esas instrucciones.
+- **Computadora (Chrome o Edge):** botón de la app, o el ícono de instalar que aparece en la barra de direcciones.
+
+La app instalada se abre a pantalla completa con el ícono de Charla. Al publicar una versión nueva, se actualiza
+sola la próxima vez que se abre (si no, cerrala del todo y volvé a abrirla).
+
+Detalles técnicos: `manifest.webmanifest` define nombre, colores e íconos; `sw.js` guarda la interfaz en caché para
+que abra sin conexión. El service worker **no intercepta** Firebase: cuentas, mensajes e imágenes nunca se guardan
+en esa caché. Si cambiás archivos de `public/` y querés forzar que todos vuelvan a bajarlos, cambiá `CACHE`
+(`charla-shell-v1` → `v2`) en `sw.js`.
+
+---
+
 ## Límites conocidos
 
 - **Anti-bots:** la verificación de email frena los registros automáticos más simples, pero no a alguien con
@@ -189,8 +225,10 @@ Después seguí con los pasos 6 y 7 de la opción A.
   Cloud Storage for Firebase, que desde 2024 exige el plan de pago Blaze para crear un bucket nuevo.
 - Los mensajes no están cifrados de extremo a extremo: Google/Firebase puede técnicamente leerlos.
 - Cualquiera que conozca tu código puede mandarte una solicitud (no podrá escribirte hasta que aceptes, y podés bloquearlo).
-- Sin notificaciones push, estados de lectura ni recuperación de contraseña en la interfaz
-  (Firebase Auth la soporta con `sendPasswordResetEmail`).
-#   c h a r l a  
- #   c h a r l a  
- 
+- **Borrado:** elimina el mensaje para los dos y no se puede deshacer. Solo se pueden borrar mensajes propios y
+  solo con el chat aceptado (no en un chat bloqueado o pendiente). Quien ya hizo una captura o copió el texto
+  lo conserva, como en cualquier chat.
+- **Sin conexión:** la interfaz abre, pero los chats necesitan internet. Un mensaje escrito sin conexión se envía
+  cuando vuelve, siempre que no cierres la pestaña antes.
+- Sin notificaciones push (la app instalada no avisa de mensajes nuevos si está cerrada), estados de lectura ni
+  recuperación de contraseña en la interfaz (Firebase Auth la soporta con `sendPasswordResetEmail`).

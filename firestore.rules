@@ -11,6 +11,7 @@ rules_version = '2';
 //   1. Solo usuarios con el email verificado pueden hacer algo (corta bots que llamen a la API directo).
 //   2. Solo los 2 miembros de un chat pueden leerlo o escribir en él.
 //   3. Los mensajes solo se pueden enviar si el chat está aceptado (no pendiente ni bloqueado).
+//   4. Los mensajes no se editan. Cada persona solo puede borrar los suyos (con el chat aceptado).
 //
 // Estados de un chat (campo "status"):
 //   pending  -> lo creó "requester"; el otro miembro todavía no respondió. No se puede escribir.
@@ -170,8 +171,13 @@ service cloud.firestore {
           && request.resource.data.createdAt == request.time
           && (validText() || validImageMessage());
 
-        // Los mensajes no se editan ni se borran.
-        allow update, delete: if false;
+        // Los mensajes no se editan nunca (si te equivocás, mandás "hola*").
+        allow update: if false;
+
+        // Solo el autor puede borrar su propio mensaje, y solo mientras el chat esté aceptado.
+        allow delete: if signedIn()
+          && chatOpen()
+          && resource.data.senderId == request.auth.uid;
       }
 
       // ---------- Imágenes (JPEG comprimido en base64, ~700 KB como máximo) ----------
@@ -188,7 +194,12 @@ service cloud.firestore {
           && request.resource.data.data.size() <= 750000
           && request.resource.data.createdAt == request.time;
 
-        allow update, delete: if false;
+        allow update: if false;
+
+        // Se borra junto con su mensaje: solo el autor, y solo con el chat aceptado.
+        allow delete: if signedIn()
+          && chatOpen()
+          && resource.data.senderId == request.auth.uid;
       }
     }
   }
