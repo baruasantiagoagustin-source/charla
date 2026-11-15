@@ -138,9 +138,10 @@ await t("los mensajes no se editan", async () => {
   const snap = await getDocs(collection(verified("alice"), "chats", AB, "messages"));
   await assertFails(updateDoc(snap.docs[0].ref, { text: "editado" }));
 });
-await t("los mensajes no se borran", async () => {
+await t("no puede borrar el mensaje de otro", async () => {
   const snap = await getDocs(collection(verified("alice"), "chats", AB, "messages"));
-  await assertFails(deleteDoc(snap.docs[0].ref));
+  const bobMsg = snap.docs.find((d) => d.data().senderId === "bob");
+  await assertFails(deleteDoc(bobMsg.ref));
 });
 await t("no se puede cambiar la lista de miembros", () => assertFails(updateDoc(doc(verified("alice"), "chats", AB), { members: ["alice", "carol"] })));
 await t("no se puede borrar el chat", () => assertFails(deleteDoc(doc(verified("alice"), "chats", AB))));
@@ -159,6 +160,53 @@ await t("carol no puede leer la imagen", async () => {
 });
 await t("no se puede subir imagen con otro mime", () =>
   assertFails(setDoc(doc(collection(verified("alice"), "chats", AB, "images")), { senderId: "alice", mime: "image/svg+xml", data: "QUJD", createdAt: serverTimestamp() })));
+
+console.log("Borrar mensajes");
+await reset();
+await seedChat(AB, { members: ["alice", "bob"], status: "accepted", requester: "alice", blockedBy: null, lastMessage: "", lastMessageAt: new Date() });
+await t("alice borra su propio mensaje", async () => {
+  await sendText(verified("alice"), AB, "alice", "uno");
+  const snap = await getDocs(collection(verified("alice"), "chats", AB, "messages"));
+  await assertSucceeds(deleteDoc(snap.docs[0].ref));
+});
+await t("bob no puede borrar un mensaje de alice", async () => {
+  await sendText(verified("alice"), AB, "alice", "dos");
+  const snap = await getDocs(collection(verified("alice"), "chats", AB, "messages"));
+  await assertFails(deleteDoc(doc(verified("bob"), "chats", AB, "messages", snap.docs[0].id)));
+});
+await t("un tercero no puede borrar mensajes del chat", async () => {
+  const snap = await getDocs(collection(verified("alice"), "chats", AB, "messages"));
+  await assertFails(deleteDoc(doc(verified("carol"), "chats", AB, "messages", snap.docs[0].id)));
+});
+await t("un mensaje borrado no se puede editar de ninguna forma", async () => {
+  const snap = await getDocs(collection(verified("alice"), "chats", AB, "messages"));
+  await assertFails(updateDoc(snap.docs[0].ref, { text: "editado*" }));
+});
+await t("alice borra su imagen junto con el mensaje y actualiza la vista previa", async () => {
+  await sendImage(verified("alice"), AB, "alice");
+  const db = verified("alice");
+  const chatRef = doc(db, "chats", AB);
+  const imgs = await getDocs(collection(chatRef, "images"));
+  const msgs = await getDocs(collection(chatRef, "messages"));
+  const imgMsg = msgs.docs.find((d) => d.data().imageId);
+  const b = writeBatch(db);
+  b.delete(imgMsg.ref);
+  b.delete(imgs.docs[0].ref);
+  b.update(chatRef, { lastMessage: "dos" });
+  await assertSucceeds(b.commit());
+});
+await t("bob no puede borrar la imagen de alice", async () => {
+  await sendImage(verified("alice"), AB, "alice");
+  const imgs = await getDocs(collection(verified("alice"), "chats", AB, "images"));
+  await assertFails(deleteDoc(doc(verified("bob"), "chats", AB, "images", imgs.docs[0].id)));
+});
+await t("no se puede borrar mensajes de un chat bloqueado", async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), "chats", AB, "messages", "viejo"), { senderId: "alice", text: "x", createdAt: new Date() });
+    await updateDoc(doc(ctx.firestore(), "chats", AB), { status: "blocked", blockedBy: "bob" });
+  });
+  await assertFails(deleteDoc(doc(verified("alice"), "chats", AB, "messages", "viejo")));
+});
 
 console.log("Bloqueo");
 await reset();
