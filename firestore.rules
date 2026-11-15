@@ -1,0 +1,195 @@
+rules_version = '2';
+
+// Estructura de datos:
+//   users/{uid}                      -> perfil público: displayName, friendCode
+//   friendCodes/{code}               -> { uid } (índice para buscar por código y garantizar unicidad)
+//   chats/{chatId}                   -> { members, status, requester, blockedBy, lastMessage, lastMessageAt }
+//   chats/{chatId}/messages/{msgId}  -> { senderId, text, imageId?, createdAt }
+//   chats/{chatId}/images/{imgId}    -> { senderId, mime, data (base64 JPEG), createdAt }
+//
+// Principios:
+//   1. Solo usuarios con el email verificado pueden hacer algo (corta bots que llamen a la API directo).
+//   2. Solo los 2 miembros de un chat pueden leerlo o escribir en él.
+//   3. Los mensajes solo se pueden enviar si el chat está aceptado (no pendiente ni bloqueado).
+//
+// Estados de un chat (campo "status"):
+//   pending  -> lo creó "requester"; el otro miembro todavía no respondió. No se puede escribir.
+//   accepted -> los dos pueden escribir.
+//   blocked  -> "blockedBy" bloqueó al otro. No se puede escribir; solo quien bloqueó puede desbloquear.
+// Los chats viejos sin "status" se tratan como "accepted".
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    // ---------- Perfiles ----------
+    match /users/{uid} {
+      // Solo lectura puntual (get). No se permite listar todos los usuarios.
+      allow get: if signedIn();
+      allow list: if false;
+
+      // Se crea una sola vez, con un friendCode que ya quedó reservado a nombre de este usuario.
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['displayName', 'friendCode', 'createdAt'])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() >= 1
+        && request.resource.data.displayName.size() <= 40
+        && request.resource.data.friendCode is string
+        && getAfter(/databases/$(database)/documents/friendCodes/$(request.resource.data.friendCode)).data.uid == uid;
+
+      // Solo se puede cambiar el nombre; el código de amistad es inmutable.
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName'])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() >= 1
+        && request.resource.data.displayName.size() <= 40;
+
+      allow delete: if false;
+    }
+
+    // ---------- Códigos de amistad ----------
+    match /friendCodes/{code} {
+      // Buscar por código exacto (get). No se puede listar.
+      allow get: if signedIn();
+      allow list: if false;
+
+      // Un usuario solo puede reservar un código, y solo si todavía no tiene perfil.
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid
+        && code.matches('^[A-Z0-9]{8}$')
+        && !exists(/databases/$(database)/documents/users/$(request.auth.uid));
+
+      allow update, delete: if false;
+    }
+
+    // ---------- Chats ----------
+    match /chats/{chatId} {
+
+      // Helpers que leen el documento del chat (sirven también para las subcolecciones).
+      function chatDoc() {
+        return get(/databases/$(database)/documents/chats/$(chatId)).data;
+      }
+      function memberOfChat() {
+        return request.auth.uid in chatDoc().members;
+      }
+      function chatOpen() {
+        return memberOfChat() && chatDoc().get('status', 'accepted') == 'accepted';
+      }
+
+      // Helpers para validar escrituras sobre el propio documento del chat.
+      function oldStatus() {
+        return resource.data.get('status', 'accepted');
+      }
+      function changedKeys() {
+        return request.resource.data.diff(resource.data).affectedKeys();
+      }
+      function otherMember() {
+        return request.resource.data.members[0] == request.auth.uid
+          ? request.resource.data.members[1]
+          : request.resource.data.members[0];
+      }
+
+      // get: permitido si el chat no existe todavía (para que el cliente pueda comprobarlo) o si sos miembro.
+      allow get: if signedIn()
+        && (resource == null || request.auth.uid in resource.data.members);
+
+      // list: solo devuelve chats donde sos miembro (la consulta debe filtrar por array-contains).
+      allow list: if signedIn()
+        && request.auth.uid in resource.data.members;
+
+      // Crear una solicitud: 2 miembros distintos, uno sos vos, el otro existe, y queda "pending" a tu nombre.
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['members', 'status', 'requester', 'blockedBy', 'createdAt', 'lastMessage', 'lastMessageAt'])
+        && request.resource.data.members is list
+        && request.resource.data.members.size() == 2
+        && request.resource.data.members[0] != request.resource.data.members[1]
+        && request.auth.uid in request.resource.data.members
+        && (chatId == request.resource.data.members[0] + '_' + request.resource.data.members[1]
+            || chatId == request.resource.data.members[1] + '_' + request.resource.data.members[0])
+        && exists(/databases/$(database)/documents/users/$(otherMember()))
+        && request.resource.data.status == 'pending'
+        && request.resource.data.requester == request.auth.uid
+        && request.resource.data.blockedBy == null;
+
+      // Actualizar: solo miembros, los miembros nunca cambian, y solo estas 4 transiciones.
+      allow update: if signedIn()
+        && request.auth.uid in resource.data.members
+        && request.resource.data.members == resource.data.members
+        && (
+          // 1) Enviar mensaje: solo se actualiza la vista previa, y solo si el chat está aceptado.
+          (changedKeys().hasOnly(['lastMessage', 'lastMessageAt'])
+            && oldStatus() == 'accepted')
+          // 2) Aceptar: solo quien recibió la solicitud (no quien la envió).
+          || (changedKeys().hasOnly(['status'])
+            && oldStatus() == 'pending'
+            && request.resource.data.status == 'accepted'
+            && resource.data.requester != request.auth.uid)
+          // 3) Bloquear: cualquiera de los dos, en cualquier momento, quedando registrado quién bloqueó.
+          || (changedKeys().hasOnly(['status', 'blockedBy'])
+            && oldStatus() != 'blocked'
+            && request.resource.data.status == 'blocked'
+            && request.resource.data.blockedBy == request.auth.uid)
+          // 4) Desbloquear: solo quien bloqueó. El chat vuelve a "accepted".
+          || (changedKeys().hasOnly(['status', 'blockedBy'])
+            && oldStatus() == 'blocked'
+            && resource.data.blockedBy == request.auth.uid
+            && request.resource.data.status == 'accepted'
+            && request.resource.data.blockedBy == null)
+        );
+
+      allow delete: if false;
+
+      // ---------- Mensajes ----------
+      match /messages/{msgId} {
+        function validText() {
+          return request.resource.data.keys().hasOnly(['senderId', 'text', 'createdAt'])
+            && request.resource.data.text is string
+            && request.resource.data.text.size() >= 1
+            && request.resource.data.text.size() <= 2000;
+        }
+        function validImageMessage() {
+          return request.resource.data.keys().hasOnly(['senderId', 'text', 'imageId', 'createdAt'])
+            && request.resource.data.text == ''
+            && request.resource.data.imageId is string
+            && request.resource.data.imageId.size() > 0
+            && request.resource.data.imageId.size() <= 40;
+        }
+
+        // Leer el historial siempre se permite a los miembros (incluso si el chat está bloqueado).
+        allow read: if signedIn() && memberOfChat();
+
+        allow create: if signedIn()
+          && chatOpen()
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && (validText() || validImageMessage());
+
+        // Los mensajes no se editan ni se borran.
+        allow update, delete: if false;
+      }
+
+      // ---------- Imágenes (JPEG comprimido en base64, ~700 KB como máximo) ----------
+      match /images/{imgId} {
+        allow read: if signedIn() && memberOfChat();
+
+        allow create: if signedIn()
+          && chatOpen()
+          && request.resource.data.keys().hasOnly(['senderId', 'mime', 'data', 'createdAt'])
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.mime == 'image/jpeg'
+          && request.resource.data.data is string
+          && request.resource.data.data.size() > 0
+          && request.resource.data.data.size() <= 750000
+          && request.resource.data.createdAt == request.time;
+
+        allow update, delete: if false;
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "charla",
+  "version": "1.0.0",
+  "description": "App web de mensajería privada. Al registrarte recibís un **código de amistad** de 8 caracteres (es tu ID público). Quien tenga tu código puede abrir un chat con vos; nadie más puede ver esa conversación.",
+  "main": "app.js",
+  "scripts": {
+    "test": "npm --prefix tests test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "firebase": "^13.3.0"
+  }
+}

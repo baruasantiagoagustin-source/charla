@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Charla</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <p id="boot" class="placeholder">Cargando…</p>
+
+  <!-- ===== Pantalla de acceso ===== -->
+  <section id="auth-screen" class="auth hidden">
+    <form id="auth-form" class="auth-card" autocomplete="on">
+      <h1>Charla</h1>
+      <p class="auth-sub" id="auth-sub">Chats privados con tu código de amistad.</p>
+
+      <label id="name-field" class="hidden">
+        Nombre
+        <input id="auth-name" type="text" maxlength="40" autocomplete="nickname" placeholder="Cómo te van a ver">
+      </label>
+      <label>
+        Email
+        <input id="auth-email" type="email" required autocomplete="email" placeholder="vos@ejemplo.com">
+      </label>
+      <label>
+        Contraseña
+        <input id="auth-password" type="password" required minlength="6" autocomplete="current-password" placeholder="Mínimo 6 caracteres">
+      </label>
+
+      <p id="auth-error" class="error" role="alert"></p>
+      <button id="auth-submit" type="submit" class="primary">Entrar</button>
+      <button id="auth-toggle" type="button" class="link">¿No tenés cuenta? Registrate</button>
+    </form>
+  </section>
+
+  <!-- ===== Verificación de email ===== -->
+  <section id="verify-screen" class="auth hidden">
+    <div class="auth-card">
+      <h1>Verificá tu email</h1>
+      <p class="auth-sub">
+        Te enviamos un enlace a <strong id="verify-email">tu email</strong>.
+        Abrilo y volvé a esta pestaña: se actualiza sola cuando lo verifiques.
+      </p>
+      <p class="auth-sub small">Si no lo encontrás, revisá la carpeta de spam o correo no deseado.</p>
+
+      <p id="verify-info" class="info" role="status"></p>
+      <p id="verify-error" class="error" role="alert"></p>
+
+      <button id="verify-check" type="button" class="primary">Ya verifiqué mi email</button>
+      <button id="verify-resend" type="button" class="ghost">Reenviar email</button>
+      <button id="verify-logout" type="button" class="link">Usar otra cuenta</button>
+    </div>
+  </section>
+
+  <!-- ===== App principal ===== -->
+  <main id="app-screen" class="app hidden">
+
+    <aside id="sidebar" class="sidebar">
+      <header class="sidebar-head">
+        <div class="me">
+          <strong id="me-name">—</strong>
+          <button id="me-code" class="code-chip" type="button" title="Tocá para copiar tu código">
+            <span id="me-code-text">········</span>
+            <small>copiar</small>
+          </button>
+        </div>
+        <button id="logout" class="ghost" type="button">Salir</button>
+      </header>
+
+      <form id="add-form" class="add-form">
+        <input id="add-code" type="text" maxlength="8" placeholder="Código de amistad" autocapitalize="characters" spellcheck="false" autocomplete="off">
+        <button type="submit" class="primary">Agregar</button>
+      </form>
+      <p id="add-error" class="error" role="alert"></p>
+
+      <ul id="chat-list" class="chat-list"></ul>
+      <p id="chat-empty" class="empty hidden">
+        Todavía no tenés chats.<br>
+        Pasale tu código a alguien o ingresá el suyo arriba.
+      </p>
+    </aside>
+
+    <section id="chat-pane" class="chat-pane">
+      <div id="chat-placeholder" class="placeholder">
+        <p>Elegí un chat o agregá a alguien con su código de amistad.</p>
+      </div>
+
+      <div id="chat-view" class="chat-view hidden">
+        <header class="chat-head">
+          <button id="back" class="ghost back" type="button" aria-label="Volver">←</button>
+          <div class="chat-head-info">
+            <strong id="chat-title">—</strong>
+            <small id="chat-subtitle"></small>
+          </div>
+          <button id="block-toggle" class="ghost danger hidden" type="button">Bloquear</button>
+        </header>
+
+        <div id="chat-banner" class="banner hidden">
+          <p id="banner-text"></p>
+          <div class="banner-actions">
+            <button id="banner-accept" type="button" class="primary hidden">Aceptar</button>
+            <button id="banner-block" type="button" class="ghost danger hidden">Bloquear</button>
+            <button id="banner-unblock" type="button" class="primary hidden">Desbloquear</button>
+          </div>
+        </div>
+
+        <div id="messages" class="messages" aria-live="polite"></div>
+
+        <form id="send-form" class="send-form" autocomplete="off">
+          <button id="attach" type="button" class="ghost attach" aria-label="Enviar imagen" title="Enviar imagen">📎</button>
+          <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden">
+          <input id="send-text" type="text" maxlength="2000" placeholder="Escribí un mensaje" required>
+          <button id="send-btn" type="submit" class="primary">Enviar</button>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <!-- Visor de imágenes -->
+  <div id="lightbox" class="lightbox hidden" role="dialog" aria-label="Imagen ampliada">
+    <img id="lightbox-img" alt="Imagen ampliada">
+  </div>
+
+  <div id="toast" class="toast" role="status"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
