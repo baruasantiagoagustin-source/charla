@@ -192,4 +192,5 @@ Después seguí con los pasos 6 y 7 de la opción A.
 - Sin notificaciones push, estados de lectura ni recuperación de contraseña en la interfaz
   (Firebase Auth la soporta con `sendPasswordResetEmail`).
 #   c h a r l a  
+ #   c h a r l a  
  
